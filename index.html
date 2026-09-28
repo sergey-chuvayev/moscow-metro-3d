@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Глубина московского метро</title>
+  <meta name="description" content="A 3D map of how deep the Moscow Metro runs beneath the city." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%23e42313%22/%3E%3Ctext x=%2216%22 y=%2223%22 font-size=%2219%22 font-family=%22sans-serif%22 font-weight=%22800%22 fill=%22white%22 text-anchor=%22middle%22%3EM%3C/text%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="src/style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three/three.module.js",
+        "three/addons/": "./vendor/three/addons/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="scene"></div>
+  <div class="vignette"></div>
+
+  <aside id="panel" class="panel">
+    <header class="brand">
+      <div class="brand-mark" aria-hidden="true">M</div>
+      <div>
+        <h1 data-i18n="title">Moscow Metro, underground</h1>
+        <p class="muted" id="subtitle"></p>
+      </div>
+      <button class="icon-btn only-mobile" id="panel-toggle" aria-label="Toggle panel">☰</button>
+    </header>
+
+    <div class="panel-body">
+      <section class="group">
+        <div class="seg" role="tablist" aria-label="Camera view">
+          <button data-view="overview" class="active" data-i18n="vOverview">Overview</button>
+          <button data-view="side" data-i18n="vSide">Cross-section</button>
+          <button data-view="top" data-i18n="vTop">Top</button>
+          <button data-view="below" data-i18n="vBelow">From below</button>
+        </div>
+      </section>
+
+      <section class="group">
+        <label class="slider">
+          <span><span data-i18n="exag">Depth exaggeration</span> <b id="exag-val">60×</b></span>
+          <input type="range" id="exag" min="1" max="100" value="60" />
+        </label>
+        <label class="slider">
+          <span><span data-i18n="ground">Ground</span> <b id="ground-val">85%</b></span>
+          <input type="range" id="ground" min="0" max="100" value="85" />
+        </label>
+        <div class="toggles">
+          <label class="chk"><input type="checkbox" id="t-depthcolor" /> <span data-i18n="colorDepth">Color by depth</span></label>
+          <label class="chk"><input type="checkbox" id="t-shafts" checked /> <span data-i18n="shafts">Shafts to surface</span></label>
+          <label class="chk"><input type="checkbox" id="t-transfers" checked /> <span data-i18n="transfers">Transfers</span></label>
+          <label class="chk"><input type="checkbox" id="t-rotate" /> <span data-i18n="rotate">Auto-rotate</span></label>
+        </div>
+        <div id="depth-legend" class="depth-legend" hidden>
+          <div class="bar"></div>
+          <div class="ticks"><span>0 m</span><span>20</span><span>40</span><span>60</span><span>80 m</span></div>
+        </div>
+      </section>
+
+      <section class="group">
+        <div class="group-head">
+          <h2 data-i18n="lines">Lines</h2>
+          <button class="link" id="all-lines" data-i18n="showAll">show all</button>
+        </div>
+        <ul id="lines" class="lines"></ul>
+      </section>
+
+      <section class="group">
+        <h2 data-i18n="deepest">Deepest stations</h2>
+        <ol id="deepest" class="deepest"></ol>
+      </section>
+
+      <footer class="foot muted">
+        <button class="link" id="lang">Русский</button>
+        <span>·</span>
+        <span data-i18n="sources">Data: Wikidata, ru.wikipedia, hh.ru. Map © OpenStreetMap, © Stadia Maps / Esri</span>
+      </footer>
+    </div>
+  </aside>
+
+  <div id="card" class="card" hidden></div>
+
+  <section id="profile" class="profile" hidden>
+    <div class="profile-head">
+      <div class="profile-title"></div>
+      <button class="icon-btn" id="profile-close" aria-label="Close">✕</button>
+    </div>
+    <svg id="profile-svg"></svg>
+  </section>
+
+  <div id="tooltip" class="tooltip" hidden></div>
+  <div class="hint muted" id="hint" data-i18n="hint">Drag to orbit · right-drag to pan · scroll to zoom · click a line or station</div>
+  <div id="loading" class="loading"><div class="spinner"></div><span>Роем тоннели…</span></div>
+
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
