@@ -2,6 +2,8 @@
 
 A 3D map of the Moscow Metro: the city map lies on a translucent ground plane and every line runs underneath it at its real depth (exaggerated, since 84 m is tiny next to a 50 km city).
 
+**Live:** https://sergey-chuvayev.github.io/moscow-metro-3d/
+
 ## Run
 
 No build step. Serve the folder over HTTP:
