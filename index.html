@@ -85,6 +85,16 @@
     </div>
   </aside>
 
+  <section id="timeline" class="timeline" aria-label="Timeline">
+    <button id="tl-play" class="tl-play" aria-label="Play">▶</button>
+    <div class="tl-main">
+      <div class="tl-row"><b id="tl-year"></b><span id="tl-count"></span></div>
+      <input type="range" id="tl-range" step="0.01" />
+      <div class="tl-axis"><span>1935</span><span>1960</span><span>1985</span><span>2010</span><span id="tl-last"></span></div>
+    </div>
+  </section>
+  <div id="tl-caption" class="tl-caption" hidden></div>
+
   <div id="card" class="card" hidden></div>
 
   <section id="profile" class="profile" hidden>

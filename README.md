@@ -19,6 +19,8 @@ python3 -m http.server 8765
 - Hover a line or station for details. Click a line to isolate it and open its **depth profile** (distance vs depth). Click a station for its depth card and transfers.
 - Depth exaggeration slider (1x-100x), ground opacity, color by depth, shafts to the surface, transfers.
 - Hide or show lines, jump to the deepest stations, switch between English and Russian.
+- **Timeline**: press play to watch the network grow from 1935 to today, with captions for key moments. Drag the slider to stop at any year.
+- Station cards show a photo from Wikimedia Commons (with author and licence) and the opening date.
 
 ## Data
 
@@ -26,6 +28,8 @@ python3 -m http.server 8765
 
 - Stations, coordinates, order, colours: hh.ru metro API
 - Depths: Wikidata (P4511), filled in from Russian Wikipedia infoboxes
+- Opening dates: Wikidata (P1619, per-line P580 where a station serves several lines), with a few manual fixes in `OPEN_OVERRIDES`
+- Photos: Wikidata (P18), resolved to Commons thumbnails with author and licence
 - 17 stations without a published depth use estimates. The data marks them `"source": "estimate"` and the UI flags them
 - MCC (Central Circle) is surface rail and set to 0 m. Vorobyovy Gory sits on a bridge (+8 m)
 

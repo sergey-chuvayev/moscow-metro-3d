@@ -37,6 +37,8 @@ const I18N = {
     surface: 'at street level', kinds: { deep: 'Deep-level', shallow: 'Shallow', surface: 'Surface', elevated: 'Elevated' },
     floors: (n) => `As deep as a <b>${n}-storey</b> building is tall`,
     estimate: 'Depth is an estimate: no published figure found.', transfer: 'Transfer to', m: 'm', langBtn: 'Русский', showHide: 'Show / hide', close: 'Close', docTitle: 'Moscow Metro Depths',
+    photo: 'Photo', opened: 'Opened', play: 'Play', pause: 'Pause', now: 'today',
+    tlStations: (n) => `${n} ${n === 1 ? 'station' : 'stations'}`,
     loading: 'Digging tunnels…',
   },
   ru: {
@@ -50,6 +52,8 @@ const I18N = {
     surface: 'на уровне земли', kinds: { deep: 'Глубокого заложения', shallow: 'Мелкого заложения', surface: 'Наземная', elevated: 'Эстакада / мост' },
     floors: (n) => `Как <b>${n}-этажный</b> дом, только вниз`,
     estimate: 'Глубина приблизительная: точных данных не нашлось.', transfer: 'Пересадка', m: 'м', langBtn: 'English', showHide: 'Показать / скрыть', close: 'Закрыть', docTitle: 'Глубина московского метро',
+    photo: 'Фото', opened: 'Открыта', play: 'Запустить', pause: 'Пауза', now: 'сегодня',
+    tlStations: (n) => `${n} ${ruPlural(n, 'станция', 'станции', 'станций')}`,
     loading: 'Роем тоннели…',
   },
 };
@@ -161,6 +165,16 @@ for (const s of data.stations) {
   Object.assign(s, project(s.lat, s.lng), { transfers: [], pos: new THREE.Vector3() });
   stationById.set(s.id, s);
 }
+// Opening dates as fractional years (1935.37 = mid-May 1935), used by the timeline.
+const toYear = (iso) => {
+  const d = new Date(iso + 'T00:00:00Z'), y = d.getUTCFullYear();
+  return y + (d - Date.UTC(y, 0, 1)) / (Date.UTC(y + 1, 0, 1) - Date.UTC(y, 0, 1));
+};
+for (const s of data.stations) s.openY = toYear(s.open);
+const FIRST_YEAR = 1935, LAST_YEAR = Math.max(...data.stations.map((s) => Math.floor(s.openY)));
+const TIMELINE_END = LAST_YEAR + 0.999;
+state.year = TIMELINE_END;
+const isOpen = (s) => s.openY <= state.year;
 for (const [a, b] of data.transfers) {
   stationById.get(a).transfers.push(stationById.get(b));
   stationById.get(b).transfers.push(stationById.get(a));
@@ -279,25 +293,29 @@ function tubeMaterial() {
   return new THREE.ShaderMaterial({
     vertexColors: true,
     transparent: true,
-    uniforms: { uOpacity: { value: 1 }, uGlow: { value: 0 } },
+    uniforms: { uOpacity: { value: 1 }, uGlow: { value: 0 }, uYear: { value: 3000 }, uFresh: { value: 0 } },
     vertexShader: /* glsl */ `
-      varying vec3 vColor; varying vec3 vN; varying vec3 vV;
+      attribute float aYear;
+      varying vec3 vColor; varying vec3 vN; varying vec3 vV; varying float vYear;
       void main() {
         vColor = color;
+        vYear = aYear;
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
         vN = normalize(normalMatrix * normal);
         vV = normalize(-mv.xyz);
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: /* glsl */ `
-      uniform float uOpacity; uniform float uGlow;
-      varying vec3 vColor; varying vec3 vN; varying vec3 vV;
+      uniform float uOpacity; uniform float uGlow; uniform float uYear; uniform float uFresh;
+      varying vec3 vColor; varying vec3 vN; varying vec3 vV; varying float vYear;
       void main() {
+        if (vYear > uYear) discard;
+        float fresh = uFresh * (1.0 - clamp((uYear - vYear) / 1.2, 0.0, 1.0));
         vec3 n = normalize(vN), v = normalize(vV);
         float ndv = max(dot(n, v), 0.0);
         float rim = pow(1.0 - ndv, 2.2);
         float spec = pow(ndv, 24.0) * 0.35;
-        vec3 c = vColor * (0.42 + 0.58 * ndv) + vColor * rim * 0.9 + spec + vColor * uGlow * 1.6;
+        vec3 c = vColor * (0.42 + 0.58 * ndv) + vColor * rim * 0.9 + spec + vColor * uGlow * 1.6 + (vColor * 0.8 + 0.25) * fresh;
         gl_FragColor = vec4(c, uOpacity);
       }`,
   });
@@ -337,7 +355,8 @@ for (const s of data.stations) {
   s.mesh = new THREE.Mesh(stationGeo, l.stationMat);
   s.mesh.scale.setScalar(big ? 0.16 : 0.12);
   s.halo = new THREE.Mesh(haloGeo, l.haloMat);
-  s.halo.scale.setScalar(big ? 0.27 : 0.21);
+  s.haloBase = big ? 0.27 : 0.21;
+  s.halo.scale.setScalar(s.haloBase);
   s.halo.renderOrder = 3;
   s.mesh.renderOrder = 4;
   groups.stations.add(s.mesh, s.halo);
@@ -377,6 +396,22 @@ function tubeColors(geo, line) {
   geo.setAttribute('color', new THREE.BufferAttribute(arr, 3));
 }
 
+// Each tube vertex gets the year its stretch of tunnel opened. A stretch opens with the
+// later of its two stations and "digs" itself from the older end over GROW years.
+const GROW = 0.45;
+function tubeYears(geo, stations, closed, tubular, radial) {
+  const n = stations.length, edges = closed ? n : n - 1;
+  const arr = new Float32Array((tubular + 1) * (radial + 1));
+  for (let i = 0; i <= tubular; i++) {
+    const f = (i / tubular) * edges, e = Math.min(Math.floor(f), edges - 1), u = f - e;
+    const a = stations[e].openY, b = stations[(e + 1) % n].openY;
+    const prog = a <= b ? u : 1 - u;
+    const y = Math.max(a, b) - GROW * (1 - prog);
+    arr.fill(y, i * (radial + 1), (i + 1) * (radial + 1));
+  }
+  geo.setAttribute('aYear', new THREE.BufferAttribute(arr, 1));
+}
+
 function rebuild() {
   for (const s of data.stations) {
     s.pos.set(s.x, yOf(s.depth), s.z);
@@ -389,10 +424,13 @@ function rebuild() {
   for (const l of lines) {
     l.meshes = [];
     for (const seg of l.segments) {
-      const pts = seg.map((id) => stationById.get(id).pos.clone());
+      const sts = seg.map((id) => stationById.get(id));
+      const pts = sts.map((st) => st.pos.clone());
       const curve = new THREE.CatmullRomCurve3(pts, l.ring, 'centripetal', 0.5);
-      const geo = new THREE.TubeGeometry(curve, Math.max(80, pts.length * 28), TUBE_R, 10, l.ring);
+      const tubular = Math.max(80, pts.length * 28);
+      const geo = new THREE.TubeGeometry(curve, tubular, TUBE_R, 10, l.ring);
       tubeColors(geo, l);
+      tubeYears(geo, sts, l.ring, tubular, 10);
       const m = new THREE.Mesh(geo, l.tubeMat);
       m.userData.line = l;
       m.renderOrder = 2;
@@ -401,10 +439,20 @@ function rebuild() {
     }
   }
 
+  buildShafts();
+  buildGuides();
+  applyVisibility();
+}
+
+// Shafts and transfers only include stations open in the selected year.
+let shaftKey = '';
+function buildShafts() {
+  shaftKey = data.stations.filter(isOpen).length + ':' + state.exag;
   disposeGroup(groups.shafts);
   for (const l of lines) {
     const seg = [], surf = [];
     for (const s of l.stations) {
+      if (!isOpen(s)) continue;
       surf.push(s.x, 0.004, s.z);
       if (s.depth > 0) seg.push(s.x, 0, s.z, s.x, s.pos.y, s.z);
     }
@@ -424,6 +472,7 @@ function rebuild() {
   disposeGroup(groups.transfers);
   const tr = [];
   for (const [a, b] of data.transfers) {
+    if (!isOpen(stationById.get(a)) || !isOpen(stationById.get(b))) continue;
     const A = stationById.get(a).pos, B = stationById.get(b).pos;
     tr.push(A.x, A.y, A.z, B.x, B.y, B.z);
   }
@@ -432,9 +481,6 @@ function rebuild() {
   const tl = new THREE.LineSegments(tg, transferMat);
   tl.renderOrder = 3;
   groups.transfers.add(tl);
-
-  buildGuides();
-  applyVisibility();
 }
 
 // Dashed depth "floors" every 20 m, and a ruler at the south-west corner.
@@ -485,6 +531,9 @@ function applyVisibility() {
   const selLine = state.selStation?.lineObj;
   for (const l of lines) {
     const hidden = state.hidden.has(l.id);
+    const timeline = state.year < TIMELINE_END || playing;
+    l.tubeMat.uniforms.uYear.value = state.year;
+    l.tubeMat.uniforms.uFresh.value = timeline ? 1 : 0;
     const on = !active || l.id === active || (selLine && l.id === selLine.id);
     const op = on ? 1 : 0.07;
     l.tubeMat.uniforms.uOpacity.value = op;
@@ -497,8 +546,9 @@ function applyVisibility() {
     for (const m of l.meshes ?? []) m.visible = !hidden;
     for (const o of l.shaftObjs ?? []) o.visible = !hidden && state.shafts;
     for (const s of l.stations) {
-      s.mesh.visible = s.halo.visible = !hidden;
-      const show = !hidden && (
+      const open = isOpen(s);
+      s.mesh.visible = s.halo.visible = !hidden && open;
+      const show = !hidden && open && (
         s === state.selStation || s === state.hoverStation ||
         (state.focusLine === l.id && !state.hoverLine) || (state.hoverLine === l.id)
       );
@@ -512,6 +562,7 @@ function applyVisibility() {
   document.querySelectorAll('#lines li').forEach((li) => {
     li.classList.toggle('active', li.dataset.id === state.focusLine);
     li.classList.toggle('off', state.hidden.has(li.dataset.id));
+    li.classList.toggle('future', !lineById.get(li.dataset.id).stations.some(isOpen));
   });
 }
 
@@ -567,7 +618,7 @@ function pickStation(mx, my) {
   let best = null, bd = 13 * 13;
   const active = activeLine();
   for (const s of data.stations) {
-    if (state.hidden.has(s.line)) continue;
+    if (state.hidden.has(s.line) || !isOpen(s)) continue;
     tmp.copy(s.pos).project(camera);
     if (tmp.z > 1) continue;
     const sx = ((tmp.x + 1) / 2) * innerWidth, sy = ((1 - tmp.y) / 2) * innerHeight;
@@ -582,7 +633,8 @@ function pickLine(mx, my) {
   ndc.set((mx / innerWidth) * 2 - 1, -(my / innerHeight) * 2 + 1);
   raycaster.setFromCamera(ndc, camera);
   const meshes = groups.tracks.children.filter((m) => m.visible);
-  const hit = raycaster.intersectObjects(meshes, false)[0];
+  const hit = raycaster.intersectObjects(meshes, false)
+    .find((h) => h.object.geometry.attributes.aYear.getX(h.face.a) <= state.year);
   return hit?.object.userData.line ?? null;
 }
 
@@ -599,7 +651,7 @@ const hideTooltip = () => (tooltip.hidden = true);
 function stationTip(s) {
   const kd = kindOf(s.depth);
   return `<div class="row"><span class="dot" style="background:${s.lineObj.css}"></span><b>${sName(s)}</b><span class="dp">${fmtDepth(s.depth)}</span></div>
-    <div class="sub">${lName(s.lineObj)} · ${t('kinds')[kd.key]}</div>`;
+    <div class="sub">${lName(s.lineObj)} · ${t('kinds')[kd.key]} · ${s.open.slice(0, 4)}</div>`;
 }
 function lineTip(l) {
   return `<div class="row"><span class="dot" style="background:${l.css}"></span><b>${lName(l)}</b><span class="dp">${t('max')} ${fmtNum(l.maxDepth)} ${t('m')}</span></div>
@@ -674,6 +726,7 @@ function selectStation(s, frame = false) {
 function closeCard() {
   state.selStation = null;
   card.hidden = true;
+  document.body.classList.remove('has-card');
   applyVisibility();
   highlightProfile(null);
 }
@@ -682,6 +735,10 @@ function clearSelection() {
   closeCard();
   focusLine(null);
 }
+
+const esc = (x) => String(x).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const fmtDate = (iso) => new Intl.DateTimeFormat(state.lang === 'ru' ? 'ru-RU' : 'en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })
+  .format(new Date(iso + 'T00:00:00Z'));
 
 function renderCard(s) {
   const kd = kindOf(s.depth);
@@ -692,8 +749,13 @@ function renderCard(s) {
   const sub = d < 0 ? t('above') : d === 0 ? t('surface') : t('below');
   card.innerHTML = `
     <button class="icon-btn close" aria-label="${t('close')}">✕</button>
+    ${s.photo ? `<figure class="photo">
+      <img src="${s.photo.src}" alt="${sName(s)}" loading="lazy" onerror="this.parentElement.remove()" />
+      <figcaption><a href="${s.photo.page}" target="_blank" rel="noopener">${t('photo')}: ${esc(s.photo.author || 'Wikimedia Commons')}${s.photo.license ? ', ' + esc(s.photo.license) : ''}</a></figcaption>
+    </figure>` : ''}
     <h3>${sName(s)}</h3>
     <div class="ru">${state.lang === 'ru' ? s.nameEn : s.name}</div>
+    <div class="opened">${t('opened')} ${fmtDate(s.open)}</div>
     <div class="chips">${chip(s)}${others.length ? others.map(chip).join('') : ''}</div>
     <div class="depth-big"><b style="color:${kd.color}">${fmtDepth(d)}</b><span>${sub}</span></div>
     <span class="kind" style="background:${kd.color}22;color:${kd.color}">${t('kinds')[kd.key]}</span>
@@ -701,6 +763,7 @@ function renderCard(s) {
     ${s.source === 'estimate' ? `<div class="note">${t('estimate')}</div>` : ''}
   `;
   card.hidden = false;
+  document.body.classList.add('has-card');
   card.querySelector('.close').onclick = closeCard;
   card.querySelectorAll('[data-station]').forEach((b) => {
     b.onclick = () => selectStation(stationById.get(b.dataset.station), true);
@@ -904,6 +967,8 @@ document.getElementById('lang').onclick = () => {
   buildGuides();
   if (state.focusLine) renderProfile(lineById.get(state.focusLine));
   if (state.selStation) renderCard(state.selStation);
+  captionText = null;
+  updateTimeline();
 };
 document.querySelectorAll('[data-view]').forEach((b) => (b.onclick = () => setView(b.dataset.view)));
 document.getElementById('panel-toggle').onclick = () => document.getElementById('panel').classList.toggle('collapsed');
@@ -944,11 +1009,85 @@ addEventListener('resize', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Timeline: replay how the network grew, 1935 to today
+// ---------------------------------------------------------------------------
+
+const MILESTONES = [
+  [1935.37, 'The first line opens: 13 stations from Sokolniki to Park Kultury', 'Открыта первая линия: 13 станций от «Сокольников» до «Парка культуры»'],
+  [1938.69, 'Zamoskvoretskaya line opens', 'Открыта Замоскворецкая линия'],
+  [1943.0, 'The metro keeps growing even during the war', 'Метро строят даже во время войны'],
+  [1953.26, 'Deep Arbatskaya section opens, built to double as a bomb shelter', 'Глубокий Арбатский радиус: его строили и как бомбоубежище'],
+  [1954.08, 'The Circle line is closed into a ring', 'Кольцевая линия замкнулась'],
+  [1959.03, 'Leninskiye Gory (now Vorobyovy Gory): a station inside a bridge', '«Ленинские горы» (сейчас «Воробьёвы горы»): станция внутри моста'],
+  [1979.99, 'Kalininskaya line opens', 'Открыта Калининская линия'],
+  [1983.85, 'Serpukhovskaya line opens', 'Открыта Серпуховская линия'],
+  [1995.99, 'Lyublinskaya line opens', 'Открыта Люблинская линия'],
+  [2003.35, 'Park Pobedy opens: the deepest station, 84 m', 'Открыт «Парк Победы»: самая глубокая станция, 84 м'],
+  [2016.69, 'MCC opens: a surface ring around the centre', 'Открыто МЦК: наземное кольцо вокруг центра'],
+  [2023.16, 'The Big Circle Line closes: the longest metro ring in the world', 'Большая кольцевая замкнулась: самое длинное кольцо метро в мире'],
+];
+
+let playing = false;
+const tl = {
+  play: document.getElementById('tl-play'), range: document.getElementById('tl-range'),
+  year: document.getElementById('tl-year'), count: document.getElementById('tl-count'),
+  caption: document.getElementById('tl-caption'),
+};
+tl.range.min = FIRST_YEAR;
+tl.range.max = TIMELINE_END;
+document.getElementById('tl-last').textContent = LAST_YEAR;
+let captionText = '';
+
+function updateTimeline() {
+  const y = state.year, atEnd = y >= TIMELINE_END;
+  tl.range.value = y;
+  tl.year.textContent = Math.floor(y);
+  const n = data.stations.filter(isOpen).length;
+  tl.count.textContent = t('tlStations')(n) + (atEnd && !playing ? ` · ${t('now')}` : '');
+  tl.play.innerHTML = playing
+    ? '<svg width="16" height="16" viewBox="0 0 16 16"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg>'
+    : '<svg width="16" height="16" viewBox="0 0 16 16"><path d="M4 2.5v11a.8.8 0 0 0 1.2.7l9-5.5a.8.8 0 0 0 0-1.4l-9-5.5A.8.8 0 0 0 4 2.5z" fill="currentColor"/></svg>';
+  tl.play.classList.toggle('playing', playing);
+  tl.play.setAttribute('aria-label', playing ? t('pause') : t('play'));
+
+  const m = !atEnd || playing ? [...MILESTONES].reverse().find(([my]) => y >= my && y - my < 2.5) : null;
+  const text = m ? m[state.lang === 'ru' ? 2 : 1] : '';
+  if (text !== captionText) {
+    captionText = text;
+    tl.caption.hidden = !text;
+    tl.caption.textContent = text;
+  }
+
+  // Newly opened stations pulse for a moment.
+  for (const s of data.stations) {
+    const age = y - s.openY;
+    const pulse = playing && age >= 0 && age < 0.8 ? 1 + 2.2 * (1 - age / 0.8) : 1;
+    s.halo.scale.setScalar(s.haloBase * pulse);
+  }
+  if (state.selStation && !isOpen(state.selStation)) closeCard();
+  if (shaftKey !== data.stations.filter(isOpen).length + ':' + state.exag) buildShafts();
+  applyVisibility();
+}
+
+function setPlaying(on) {
+  playing = on;
+  if (on && state.year >= TIMELINE_END - 0.01) state.year = FIRST_YEAR + 0.3;
+  updateTimeline();
+}
+tl.play.onclick = () => setPlaying(!playing);
+tl.range.oninput = () => {
+  playing = false;
+  state.year = +tl.range.value >= TIMELINE_END - 0.05 ? TIMELINE_END : +tl.range.value;
+  updateTimeline();
+};
+
+// ---------------------------------------------------------------------------
 // Go
 // ---------------------------------------------------------------------------
 
 rebuild();
 renderPanel();
+updateTimeline();
 controls.target.set(0, 0, 0);
 
 function loop(now) {
@@ -958,6 +1097,13 @@ function loop(now) {
     controls.target.lerpVectors(fly.t0, fly.t1, e);
     if (x >= 1) fly = null;
   }
+  if (playing) {
+    const dt = Math.min(0.1, (now - (loop.last ?? now)) / 1000);
+    state.year = Math.min(TIMELINE_END, state.year + dt * 4.2);
+    if (state.year >= TIMELINE_END) playing = false;
+    updateTimeline();
+  }
+  loop.last = now;
   controls.update();
   if (mouseDirty) { mouseDirty = false; doHover(); }
   ground.tick(now);

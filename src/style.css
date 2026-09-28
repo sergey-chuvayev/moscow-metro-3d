@@ -122,7 +122,14 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
   animation: pop 0.25s ease-out;
 }
 @keyframes pop { from { opacity: 0; transform: translateY(-6px); } }
-.card .close { position: absolute; top: 10px; right: 10px; }
+.card { max-height: calc(100vh - 32px); overflow-y: auto; }
+.card .close { position: absolute; top: 10px; right: 10px; z-index: 2; background: rgba(5, 7, 11, 0.6); color: #fff; }
+.card .photo { position: relative; margin: -16px -16px 14px; }
+.card .photo img { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; border-radius: var(--radius) var(--radius) 0 0; background: #151a24; }
+.card .photo figcaption { position: absolute; left: 0; right: 0; bottom: 0; padding: 18px 10px 6px; font-size: 10px; background: linear-gradient(transparent, rgba(0, 0, 0, 0.7)); }
+.card .photo figcaption a { color: rgba(255, 255, 255, 0.75); text-decoration: none; }
+.card .photo figcaption a:hover { text-decoration: underline; }
+.card .opened { color: var(--muted); font-size: 12px; margin-top: 6px; }
 .card h3 { margin: 0; font-size: 18px; font-weight: 800; letter-spacing: -0.01em; padding-right: 26px; }
 .card .ru { color: var(--muted); font-size: 12.5px; margin-top: 1px; }
 .card .chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0 14px; }
@@ -169,6 +176,36 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 #profile-svg .st circle { transition: r 0.12s; }
 #profile-svg .st:hover circle, #profile-svg .st.hl circle { r: 5.5; }
 
+/* ---------- timeline ---------- */
+.timeline {
+  position: fixed; top: 16px; left: 362px; right: 16px; margin: 0 auto; width: min(520px, calc(100vw - 378px));
+  display: flex; gap: 14px; align-items: center; padding: 10px 16px 8px 10px; z-index: 5;
+  background: var(--panel); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
+  border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+  transition: right 0.25s;
+}
+body.has-card .timeline { right: 332px; width: min(520px, calc(100vw - 694px)); }
+.tl-play {
+  flex: none; width: 44px; height: 44px; border-radius: 50%; border: 0; cursor: pointer; font-size: 16px;
+  background: var(--accent); color: #05070b; display: grid; place-items: center; padding-left: 3px;
+  box-shadow: 0 0 22px rgba(126, 249, 255, 0.35); transition: transform 0.12s;
+}
+.tl-play.playing { padding-left: 0; }
+.tl-play:hover { transform: scale(1.06); }
+.tl-main { flex: 1; min-width: 0; }
+.tl-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.tl-row b { font-family: var(--mono); font-size: 22px; font-weight: 500; letter-spacing: -0.02em; line-height: 1; }
+.tl-row span { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.tl-main input { margin: 6px 0 0; display: block; }
+.tl-axis { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 9.5px; color: var(--muted); opacity: 0.7; }
+.tl-caption {
+  position: fixed; top: 98px; left: 362px; right: 16px; margin: 0 auto; width: max-content; max-width: min(520px, calc(100vw - 378px));
+  padding: 7px 14px; border-radius: 10px; z-index: 5; font-size: 13px; font-weight: 600; text-align: center;
+  background: rgba(8, 10, 15, 0.85); border: 1px solid var(--line-strong); animation: pop 0.3s ease-out;
+}
+body.has-card .tl-caption { right: 332px; }
+.lines li.future { opacity: 0.25; }
+
 /* ---------- labels, tooltip ---------- */
 .label {
   font-size: 11px; font-weight: 600; color: #fff; white-space: nowrap; pointer-events: none;
@@ -206,8 +243,11 @@ body.has-profile .hint { opacity: 0; }
   .panel { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 62vh; }
   .panel.collapsed .panel-body { display: none; }
   .only-mobile { display: grid; margin-left: auto; }
-  .card { top: 8px; right: 8px; left: 8px; width: auto; }
-  .profile { left: 8px; right: 8px; bottom: auto; top: 8px; height: 190px; }
+  .card { top: 92px; right: 8px; left: 8px; width: auto; max-height: calc(100vh - 100px); }
+  .profile { left: 8px; right: 8px; bottom: auto; top: 92px; height: 190px; }
+  .timeline, body.has-card .timeline { top: 8px; left: 8px; right: 8px; width: auto; }
+  .tl-caption, body.has-card .tl-caption { top: 90px; left: 8px; right: 8px; max-width: none; }
+  body.has-card .tl-caption, body.has-profile .tl-caption { display: none; }
   .hint { display: none; }
   .toggles { grid-template-columns: 1fr; }
 }

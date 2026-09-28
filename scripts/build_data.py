@@ -12,6 +12,7 @@ Usage: python3 scripts/build_data.py
 import json
 import math
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -21,13 +22,16 @@ CACHE = os.path.join(ROOT, "scripts", ".cache")
 UA = {"User-Agent": "moscow-metro-3d/0.1 (personal visualisation)"}
 
 SPARQL = """
-SELECT ?s ?ru ?en ?coord ?depth ?lineLabel WHERE {
+SELECT ?s ?ru ?en ?coord ?depth ?open ?image ?lineLabel ?lineStart WHERE {
   ?s wdt:P31/wdt:P279* wd:Q928830 ; wdt:P16 wd:Q5499 .
   OPTIONAL { ?s rdfs:label ?ru FILTER(lang(?ru)="ru") }
   OPTIONAL { ?s rdfs:label ?en FILTER(lang(?en)="en") }
   OPTIONAL { ?s wdt:P625 ?coord }
   OPTIONAL { ?s wdt:P4511 ?depth }
-  OPTIONAL { ?s wdt:P81 ?line . ?line rdfs:label ?lineLabel FILTER(lang(?lineLabel)="ru") }
+  OPTIONAL { ?s wdt:P1619 ?open }
+  OPTIONAL { ?s wdt:P18 ?image }
+  OPTIONAL { ?s p:P81 ?ls . ?ls ps:P81 ?line . ?line rdfs:label ?lineLabel FILTER(lang(?lineLabel)="ru")
+             OPTIONAL { ?ls pq:P580 ?lineStart } }
 }"""
 
 # hh line id -> (English name, Wikidata line labels that count as "same line")
@@ -96,6 +100,17 @@ OVERRIDES = {
     ("137", "Новомосковская"): (18, E),
     ("171", "Звенигородская"): (20, E), ("171", "Бульвар Генерала Карбышева"): (20, E),
 }
+# (line id, station name) -> opening date, where one Wikidata item covers several lines
+# that opened at different times.
+OPEN_OVERRIDES = {
+    ("1", "Библиотека им.Ленина"): "1935-05-15", ("97", "Каховская"): "1969-08-11",
+    ("6", "Третьяковская"): "1971-01-03", ("8", "Третьяковская"): "1986-01-30",
+    ("133", "Парк Победы"): "2014-01-31", ("10", "Петровско-Разумовская"): "2016-09-16",
+    ("98", "Лефортово"): "2023-03-01", ("98", "Электрозаводская"): "2023-03-01",
+    ("97", "Лефортово"): "2023-03-01", ("97", "Электрозаводская"): "2023-03-01",
+}
+MCC_OPEN = "2016-09-10"
+
 COORD_FIX = {("10", "Лианозово"): (55.89807, 37.54463)}  # hh.ru has it ~3.7 km off
 
 
@@ -126,6 +141,38 @@ def km(lat1, lng1, lat2, lng2):
     return math.hypot((lat1 - lat2) * 111.2, (lng1 - lng2) * 111.2 * math.cos(math.radians(55.75)))
 
 
+def attach_photos(stations):
+    """Resolve Wikidata P18 file names to Commons thumbnails with author and licence."""
+    files = sorted({s["image"] for s in stations if s["image"]})
+    info = {}
+    for i in range(0, len(files), 40):
+        chunk = files[i:i + 40]
+        q = urllib.parse.urlencode({
+            "action": "query", "format": "json", "prop": "imageinfo", "iiprop": "url|extmetadata",
+            "iiurlwidth": 640, "iiextmetadatafilter": "Artist|LicenseShortName",
+            "titles": "|".join("File:" + f for f in chunk),
+        })
+        body = fetch(f"commons_{i}.json", "https://commons.wikimedia.org/w/api.php?" + q)
+        norm_map = {n["to"]: n["from"] for n in body["query"].get("normalized", [])}
+        for page in body["query"]["pages"].values():
+            if "imageinfo" not in page:
+                continue
+            ii = page["imageinfo"][0]
+            meta = ii.get("extmetadata", {})
+            artist = re.sub(r"<[^>]+>", "", meta.get("Artist", {}).get("value", "")).strip()
+            title = norm_map.get(page["title"], page["title"])
+            info[title[5:]] = {
+                "src": ii["thumburl"].split("?")[0], "page": ii["descriptionurl"],
+                "author": re.sub(r"\s+", " ", artist)[:80],
+                "license": meta.get("LicenseShortName", {}).get("value", ""),
+            }
+    for s in stations:
+        f = s.pop("image")
+        key = f and (f if f in info else f.replace("_", " "))
+        s["photo"] = info.get(key) if key else None
+    print("photos:", sum(1 for s in stations if s["photo"]), "of", len(stations))
+
+
 def main():
     hh = fetch("hh.json", "https://api.hh.ru/metro/1")
     wd = fetch("wikidata.json", "https://query.wikidata.org/sparql",
@@ -134,11 +181,19 @@ def main():
     ents = {}
     for b in wd:
         e = ents.setdefault(b["s"]["value"], {"ru": b.get("ru", {}).get("value"), "en": b.get("en", {}).get("value"),
-                                               "depth": None, "lines": set(), "coord": None})
+                                               "depth": None, "lines": set(), "coord": None,
+                                               "open": None, "image": None, "lineStart": {}})
         if "depth" in b:
             e["depth"] = float(b["depth"]["value"])
         if "lineLabel" in b:
             e["lines"].add(norm(b["lineLabel"]["value"]))
+            if "lineStart" in b:
+                e["lineStart"][norm(b["lineLabel"]["value"])] = b["lineStart"]["value"][:10]
+        if "open" in b:
+            d = b["open"]["value"][:10]
+            e["open"] = min(e["open"] or d, d)
+        if "image" in b and not e["image"]:
+            e["image"] = urllib.parse.unquote(b["image"]["value"].rsplit("/", 1)[-1])
         if "coord" in b:
             lng, lat = map(float, b["coord"]["value"][6:-1].split())
             e["coord"] = (lat, lng)
@@ -178,13 +233,21 @@ def main():
             else:
                 depth, src = None, None
                 missing.append((L["name"], st["name"]))
+            opened = OPEN_OVERRIDES.get((lid, st["name"]))
+            if not opened and lid == "95":
+                opened = MCC_OPEN
+            if not opened and e:
+                aliases = [norm(a) for a in LINES[lid][1]]
+                starts = [v for l, v in e["lineStart"].items() if any(a in l for a in aliases)]
+                opened = min(starts) if starts else e["open"]
             sid = st["id"]
             by_name[st["name"]] = sid
             stations.append({
                 "id": sid, "line": lid, "name": st["name"],
                 "nameEn": (e or {}).get("en") or st["name"],
                 "lat": round(lat, 6), "lng": round(lng, 6),
-                "depth": depth, "source": src,
+                "depth": depth, "source": src, "open": opened,
+                "image": (e or {}).get("image") if lid != "95" else None,
             })
         seqs = SEQUENCES.get(lid) or [[s["name"] for s in sorted(L["stations"], key=lambda s: s["order"])]]
         lines.append({
@@ -192,6 +255,10 @@ def main():
             "color": "#" + L["hex_color"], "ring": lid in RINGS,
             "segments": [[by_name[n] for n in seq] for seq in seqs],
         })
+
+    attach_photos(stations)
+    no_open = [(s["line"], s["name"]) for s in stations if not s["open"]]
+    print("without opening date:", len(no_open), no_open)
 
     if missing:
         raise SystemExit("stations without depth: %r" % missing)
