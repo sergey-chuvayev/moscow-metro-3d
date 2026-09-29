@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Builds data/metro.json: Moscow metro lines + stations with depth.
+"""Builds data/moscow.json: Moscow metro lines + stations with depth.
 
 Sources:
   - hh.ru metro API (station list, coordinates, line colours, order)
@@ -7,7 +7,7 @@ Sources:
   - Russian Wikipedia infoboxes + manual estimates for stations Wikidata lacks
     (see OVERRIDES; every value carries its source so the UI can flag estimates)
 
-Usage: python3 scripts/build_data.py
+Usage: python3 scripts/build_moscow.py
 """
 import json
 import math
@@ -111,6 +111,23 @@ OPEN_OVERRIDES = {
 }
 MCC_OPEN = "2016-09-10"
 
+LINE_NUM = {"97": "11", "95": "14", "98": "15", "133": "8A", "137": "16", "171": ""}
+
+MILESTONES = [
+    [1935.37, "The first line opens: 13 stations from Sokolniki to Park Kultury", "Открыта первая линия: 13 станций от «Сокольников» до «Парка культуры»"],
+    [1938.69, "Zamoskvoretskaya line opens", "Открыта Замоскворецкая линия"],
+    [1943.0, "The metro keeps growing even during the war", "Метро строят даже во время войны"],
+    [1953.26, "Deep Arbatskaya section opens, built to double as a bomb shelter", "Глубокий Арбатский радиус: его строили и как бомбоубежище"],
+    [1954.08, "The Circle line is closed into a ring", "Кольцевая линия замкнулась"],
+    [1959.03, "Leninskiye Gory (now Vorobyovy Gory): a station inside a bridge", "«Ленинские горы» (сейчас «Воробьёвы горы»): станция внутри моста"],
+    [1979.99, "Kalininskaya line opens", "Открыта Калининская линия"],
+    [1983.85, "Serpukhovskaya line opens", "Открыта Серпуховская линия"],
+    [1995.99, "Lyublinskaya line opens", "Открыта Люблинская линия"],
+    [2003.35, "Park Pobedy opens: the deepest station, 84 m", "Открыт «Парк Победы»: самая глубокая станция, 84 м"],
+    [2016.69, "MCC opens: a surface ring around the centre", "Открыто МЦК: наземное кольцо вокруг центра"],
+    [2023.16, "The Big Circle Line closes: the longest metro ring in the world", "Большая кольцевая замкнулась: самое длинное кольцо метро в мире"],
+]
+
 COORD_FIX = {("10", "Лианозово"): (55.89807, 37.54463)}  # hh.ru has it ~3.7 km off
 
 
@@ -133,6 +150,10 @@ def fetch(name, url, data=None):
     raise RuntimeError("rate limited: " + url)
 
 
+def km_between(a, b):
+    return km(a["lat"], a["lng"], b["lat"], b["lng"])
+
+
 def norm(s):
     return (s or "").lower().replace("ё", "е").replace("«", "").replace("»", "").strip()
 
@@ -141,7 +162,7 @@ def km(lat1, lng1, lat2, lng2):
     return math.hypot((lat1 - lat2) * 111.2, (lng1 - lng2) * 111.2 * math.cos(math.radians(55.75)))
 
 
-def attach_photos(stations):
+def attach_photos(stations, prefix="commons"):
     """Resolve Wikidata P18 file names to Commons thumbnails with author and licence."""
     files = sorted({s["image"] for s in stations if s["image"]})
     info = {}
@@ -152,7 +173,7 @@ def attach_photos(stations):
             "iiurlwidth": 640, "iiextmetadatafilter": "Artist|LicenseShortName",
             "titles": "|".join("File:" + f for f in chunk),
         })
-        body = fetch(f"commons_{i}.json", "https://commons.wikimedia.org/w/api.php?" + q)
+        body = fetch(f"{prefix}_{i}.json", "https://commons.wikimedia.org/w/api.php?" + q)
         norm_map = {n["to"]: n["from"] for n in body["query"].get("normalized", [])}
         for page in body["query"]["pages"].values():
             if "imageinfo" not in page:
@@ -271,7 +292,18 @@ def main():
                 transfers.append([a["id"], b["id"]])
 
     out = {"generated": time.strftime("%Y-%m-%d"), "lines": lines, "stations": stations, "transfers": transfers}
-    path = os.path.join(ROOT, "data", "metro.json")
+    city = {
+        "id": "moscow", "name": {"en": "Moscow", "ru": "Москва"},
+        "title": {"en": "Moscow Metro, underground", "ru": "Московское метро под землёй"},
+        "docTitle": {"en": "Moscow Metro Depths", "ru": "Глубина московского метро"},
+        "center": [55.7539, 37.6208], "exag": 60, "firstYear": 1935, "milestones": MILESTONES,
+    }
+    out["city"] = city
+    order = ["1", "2", "3", "4", "5", "6", "7", "8", "133", "9", "10", "97", "12", "95", "98", "137", "171"]
+    lines.sort(key=lambda l: order.index(l["id"]))
+    for l in lines:
+        l["num"] = LINE_NUM.get(l["id"], l["id"])
+    path = os.path.join(ROOT, "data", "moscow.json")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     json.dump(out, open(path, "w"), ensure_ascii=False, separators=(",", ":"))
     deepest = sorted(stations, key=lambda s: -s["depth"])[:8]

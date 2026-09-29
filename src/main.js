@@ -10,12 +10,23 @@ import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer
 // Constants, i18n
 // ---------------------------------------------------------------------------
 
-const LAT0 = 55.7539, LNG0 = 37.6208; // Red Square = scene origin. 1 scene unit = 1 km.
-const TUBE_R = 0.085;
-const LIFT = 0.09; // surface lines ride just above the map plane
+// ?city=paris switches the dataset; Moscow is the default.
+const CITY = new URLSearchParams(location.search).get('city') === 'paris' ? 'paris' : 'moscow';
+const data = await (await fetch(`data/${CITY}.json`)).json();
+const city = data.city;
+const [LAT0, LNG0] = city.center; // scene origin. 1 scene unit = 1 km.
+
+// Everything sized in km (camera distances, tube thickness) scales with the network,
+// calibrated on Moscow (about 43 km across).
+const F = (() => {
+  const c = Math.cos((LAT0 * Math.PI) / 180);
+  const xs = data.stations.map((s) => (s.lng - LNG0) * 111.32 * c), zs = data.stations.map((s) => (s.lat - LAT0) * 111.2);
+  return Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...zs) - Math.min(...zs)) / 42.6;
+})();
+const TUBE_R = 0.085 * F;
+const LIFT = 0.09 * F; // surface lines ride just above the map plane
 const MOBILE = matchMedia('(max-width: 760px)').matches;
 
-const LINE_NUM = { 97: '11', 95: '14', 98: '15', 133: '8A', 137: '16', 171: '' };
 const DEPTH_STOPS = [[0, '#7ef9ff'], [20, '#4f8cff'], [40, '#7b5cff'], [60, '#d24dff'], [85, '#ff4d8d']];
 
 function ruPlural(n, one, few, many) {
@@ -27,7 +38,7 @@ function ruPlural(n, one, few, many) {
 
 const I18N = {
   en: {
-    title: 'Moscow Metro, underground', vOverview: 'Overview', vSide: 'Cross-section', vTop: 'Top', vBelow: 'From below',
+    vOverview: 'Overview', vSide: 'Cross-section', vTop: 'Top', vBelow: 'From below',
     exag: 'Depth exaggeration', ground: 'Ground', colorDepth: 'Color by depth', shafts: 'Shafts to surface',
     transfers: 'Transfers', rotate: 'Auto-rotate', lines: 'Lines', showAll: 'show all', deepest: 'Deepest stations',
     sources: 'Data: Wikidata, ru.wikipedia, hh.ru. Map © OpenStreetMap, © Stadia Maps / Esri',
@@ -42,7 +53,7 @@ const I18N = {
     loading: 'Digging tunnels…',
   },
   ru: {
-    title: 'Московское метро под землёй', vOverview: 'Обзор', vSide: 'Разрез', vTop: 'Сверху', vBelow: 'Снизу',
+    vOverview: 'Обзор', vSide: 'Разрез', vTop: 'Сверху', vBelow: 'Снизу',
     exag: 'Масштаб глубины', ground: 'Поверхность', colorDepth: 'Цвет по глубине', shafts: 'Шахты к поверхности',
     transfers: 'Пересадки', rotate: 'Вращение', lines: 'Линии', showAll: 'показать все', deepest: 'Самые глубокие',
     sources: 'Данные: Wikidata, ru.wikipedia, hh.ru. Карта © OpenStreetMap, © Stadia Maps / Esri',
@@ -63,14 +74,15 @@ function savedLang() {
 }
 
 const state = {
-  lang: savedLang() || 'ru', exag: 60, ground: 0.85, depthColor: false, shafts: true, transfers: true,
+  lang: savedLang() || 'ru', exag: city.exag, ground: 0.85, depthColor: false, shafts: true, transfers: true,
   hidden: new Set(), focusLine: null, hoverLine: null, hoverStation: null, selStation: null,
 };
 const t = (k) => I18N[state.lang][k] ?? I18N.en[k];
 document.querySelector('#loading span').textContent = t('loading');
 const sName = (s) => (state.lang === 'ru' ? s.name : s.nameEn);
 const lName = (l) => (state.lang === 'ru' ? l.name : l.nameEn);
-const lineNum = (l) => { const n = l.id in LINE_NUM ? LINE_NUM[l.id] : l.id; return state.lang === 'ru' ? n.replace('A', 'А') : n; };
+const lineNum = (l) => (state.lang === 'ru' ? l.num.replace('A', 'А').replace('bis', 'бис') : l.num);
+const badgeStyle = (l) => `background:${l.css}${lineNum(l).length > 2 ? ';font-size:8.5px;letter-spacing:-0.02em' : ''}`;
 const k = () => state.exag / 1000; // scene km per metre of depth
 const yOf = (d) => (d <= 0 ? LIFT - d * k() : -d * k());
 const fmtNum = (d) => (Number.isInteger(d) ? String(d) : d.toFixed(1));
@@ -131,13 +143,13 @@ container.appendChild(labelRenderer.domElement);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.05, 600);
-camera.position.set(0, 95, 1);
+camera.position.set(0, 95 * F, 1);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.minDistance = 1.2;
-controls.maxDistance = 160;
+controls.maxDistance = 160 * F;
 controls.screenSpacePanning = false;
 controls.autoRotateSpeed = 0.35;
 
@@ -158,7 +170,6 @@ Object.values(groups).forEach((g) => scene.add(g));
 // Data
 // ---------------------------------------------------------------------------
 
-const data = await (await fetch('data/metro.json')).json();
 const stationById = new Map();
 const lineById = new Map();
 for (const s of data.stations) {
@@ -171,7 +182,7 @@ const toYear = (iso) => {
   return y + (d - Date.UTC(y, 0, 1)) / (Date.UTC(y + 1, 0, 1) - Date.UTC(y, 0, 1));
 };
 for (const s of data.stations) s.openY = toYear(s.open);
-const FIRST_YEAR = 1935, LAST_YEAR = Math.max(...data.stations.map((s) => Math.floor(s.openY)));
+const FIRST_YEAR = city.firstYear, LAST_YEAR = Math.max(...data.stations.map((s) => Math.floor(s.openY)));
 const TIMELINE_END = LAST_YEAR + 0.999;
 state.year = TIMELINE_END;
 const isOpen = (s) => s.openY <= state.year;
@@ -179,8 +190,7 @@ for (const [a, b] of data.transfers) {
   stationById.get(a).transfers.push(stationById.get(b));
   stationById.get(b).transfers.push(stationById.get(a));
 }
-const ORDER = ['1', '2', '3', '4', '5', '6', '7', '8', '133', '9', '10', '97', '12', '95', '98', '137', '171'];
-const lines = data.lines.sort((a, b) => ORDER.indexOf(a.id) - ORDER.indexOf(b.id));
+const lines = data.lines;
 for (const l of lines) {
   lineById.set(l.id, l);
   l.stations = data.stations.filter((s) => s.line === l.id);
@@ -212,12 +222,15 @@ const ground = (() => {
   const local = ['localhost', '127.0.0.1', ''].includes(location.hostname);
   const hi = !MOBILE;
   const P = local
-    ? { z: 12, ts: hi ? 512 : 256, layers: [(z, x, y) => `https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/${z}/${x}/${y}${hi ? '@2x' : ''}.png`] }
-    : { z: hi ? 13 : 12, ts: 256, layers: [
+    ? { ts: hi ? 512 : 256, layers: [(z, x, y) => `https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/${z}/${x}/${y}${hi ? '@2x' : ''}.png`] }
+    : { ts: hi ? 256 : 128, layers: [
         (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/${z}/${y}/${x}`,
         (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/${z}/${y}/${x}`,
       ] };
-  const Z = P.z, ts = P.ts, pad = 0.06;
+  const ts = P.ts, pad = 0.06 * F;
+  let Z = 15;
+  while (Z > 10 && ((lng2tile(bounds.e + pad * 1.8, Z) - lng2tile(bounds.w - pad * 1.8, Z) + 2) * ts > 5200 ||
+    (lat2tile(bounds.s - pad, Z) - lat2tile(bounds.n + pad, Z) + 2) * ts > 5200)) Z--;
   const x0 = Math.floor(lng2tile(bounds.w - pad * 1.8, Z)), x1 = Math.floor(lng2tile(bounds.e + pad * 1.8, Z));
   const y0 = Math.floor(lat2tile(bounds.n + pad, Z)), y1 = Math.floor(lat2tile(bounds.s - pad, Z));
   const nx = x1 - x0 + 1, ny = y1 - y0 + 1;
@@ -345,7 +358,7 @@ for (const l of lines) {
   l.surfMat = new THREE.PointsMaterial({ color: l.color3, map: dotTexture, size: 7, sizeAttenuation: false, transparent: true, opacity: 0.8, depthWrite: false });
 }
 const transferMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5, depthWrite: false });
-const guideMat = new THREE.LineDashedMaterial({ color: 0x8fa3c0, transparent: true, opacity: 0.16, dashSize: 0.5, gapSize: 0.35, depthWrite: false });
+const guideMat = new THREE.LineDashedMaterial({ color: 0x8fa3c0, transparent: true, opacity: 0.16, dashSize: 0.5 * F, gapSize: 0.35 * F, depthWrite: false });
 const rulerMat = new THREE.LineBasicMaterial({ color: 0x8fa3c0, transparent: true, opacity: 0.55 });
 
 // Station meshes and labels are created once; rebuild() only moves them.
@@ -353,9 +366,9 @@ for (const s of data.stations) {
   const l = s.lineObj;
   const big = s.transfers.length > 0;
   s.mesh = new THREE.Mesh(stationGeo, l.stationMat);
-  s.mesh.scale.setScalar(big ? 0.16 : 0.12);
+  s.mesh.scale.setScalar((big ? 0.16 : 0.12) * F);
   s.halo = new THREE.Mesh(haloGeo, l.haloMat);
-  s.haloBase = big ? 0.27 : 0.21;
+  s.haloBase = (big ? 0.27 : 0.21) * F;
   s.halo.scale.setScalar(s.haloBase);
   s.halo.renderOrder = 3;
   s.mesh.renderOrder = 4;
@@ -578,10 +591,10 @@ function flyTo(pos, target, dur = 1400) {
 renderer.domElement.addEventListener('pointerdown', () => (fly = null));
 
 const VIEWS = {
-  overview: () => [new THREE.Vector3(20, 17, 34), new THREE.Vector3(0, -2, 1)],
-  top: () => [new THREE.Vector3(0, 78, 0.01), new THREE.Vector3(0, 0, 0)],
-  side: () => [new THREE.Vector3(0, yOf(35) + 0.4, 44), new THREE.Vector3(0, yOf(35), 0)],
-  below: () => [new THREE.Vector3(14, -30, 30), new THREE.Vector3(0, -1, 0)],
+  overview: () => [new THREE.Vector3(20 * F, 17 * F, 34 * F), new THREE.Vector3(0, -2 * F, 1 * F)],
+  top: () => [new THREE.Vector3(0, 78 * F, 0.01), new THREE.Vector3(0, 0, 0)],
+  side: () => [new THREE.Vector3(0, yOf(city.id === 'paris' ? 12 : 35) + 0.4 * F, 44 * F), new THREE.Vector3(0, yOf(city.id === 'paris' ? 12 : 35), 0)],
+  below: () => [new THREE.Vector3(14 * F, -30 * F, 30 * F), new THREE.Vector3(0, -1 * F, 0)],
 };
 function setView(name) {
   const [p, tg] = VIEWS[name]();
@@ -596,13 +609,13 @@ function frameLine(l) {
   const dir = camera.position.clone().sub(controls.target).normalize();
   if (dir.y < 0.25) dir.y = 0.25;
   dir.normalize();
-  flyTo(c.clone().add(dir.multiplyScalar(Math.max(8, size * 1.25))), c);
+  flyTo(c.clone().add(dir.multiplyScalar(Math.max(8 * F, size * 1.25))), c);
 }
 
 function frameStation(s) {
   const dir = camera.position.clone().sub(controls.target).normalize();
-  const dist = Math.min(camera.position.distanceTo(controls.target), 9);
-  flyTo(s.pos.clone().add(dir.multiplyScalar(Math.max(dist, 7))), s.pos.clone());
+  const dist = Math.min(camera.position.distanceTo(controls.target), 9 * F);
+  flyTo(s.pos.clone().add(dir.multiplyScalar(Math.max(dist, 7 * F))), s.pos.clone());
 }
 
 // ---------------------------------------------------------------------------
@@ -794,7 +807,7 @@ function renderProfile(l) {
   profile.hidden = false;
   document.body.classList.add('has-profile');
   profile.querySelector('.profile-title').innerHTML = `
-    <span class="badge" style="background:${l.css}">${lineNum(l)}</span>
+    <span class="badge" style="${badgeStyle(l)}">${lineNum(l)}</span>
     <span>${lName(l)}</span>
     <small>${l.stations.length} ${t('stations')(l.stations.length)} · ${t('deepestOn')}: ${sName(l.deepestStation)} (${fmtNum(l.maxDepth)} ${t('m')}) · ${t('avg')} ${Math.round(l.avgDepth)} ${t('m')}</small>`;
   profile.querySelector('#profile-close').onclick = clearSelection;
@@ -909,15 +922,23 @@ function renderPanel() {
     if (typeof v === 'string') el.textContent = v;
   });
   document.documentElement.lang = state.lang;
-  document.title = t('docTitle');
+  document.title = city.docTitle[state.lang];
+  document.getElementById('title').textContent = city.title[state.lang];
+  const note = document.getElementById('city-note');
+  note.hidden = !city.note;
+  if (city.note) note.textContent = city.note[state.lang];
+  document.querySelectorAll('[data-city]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.city === CITY);
+    b.textContent = { moscow: { en: 'Moscow', ru: 'Москва' }, paris: { en: 'Paris', ru: 'Париж' } }[b.dataset.city][state.lang];
+  });
   document.getElementById('subtitle').textContent = t('subtitle')(data.stations.length, lines.length);
   document.getElementById('lang').textContent = t('langBtn');
 
   const ul = document.getElementById('lines');
   ul.innerHTML = lines.map((l) => `
     <li data-id="${l.id}">
-      <span class="badge" style="background:${l.css}">${lineNum(l) || '·'}</span>
-      <span class="nm"><b>${lName(l)}</b><small>${state.lang === 'ru' ? l.nameEn : l.name}</small></span>
+      <span class="badge" style="${badgeStyle(l)}">${lineNum(l) || '·'}</span>
+      <span class="nm"><b>${lName(l)}</b><small>${l.sub ?? (state.lang === 'ru' ? l.nameEn : l.name)}</small></span>
       <span class="dp">${fmtNum(l.maxDepth)} ${t('m')}</span>
       <button class="eye" title="${t('showHide')}" aria-label="${t('showHide')}">${state.hidden.has(l.id) ? '◌' : '●'}</button>
     </li>`).join('');
@@ -971,11 +992,20 @@ document.getElementById('lang').onclick = () => {
   updateTimeline();
 };
 document.querySelectorAll('[data-view]').forEach((b) => (b.onclick = () => setView(b.dataset.view)));
+document.querySelectorAll('[data-city]').forEach((b) => (b.onclick = () => {
+  if (b.dataset.city === CITY) return;
+  const u = new URL(location.href);
+  if (b.dataset.city === 'moscow') u.searchParams.delete('city');
+  else u.searchParams.set('city', b.dataset.city);
+  location.href = u;
+}));
 document.getElementById('panel-toggle').onclick = () => document.getElementById('panel').classList.toggle('collapsed');
 if (MOBILE) document.getElementById('panel').classList.add('collapsed');
 
 let rebuildQueued = false;
 const exagEl = document.getElementById('exag');
+exagEl.value = state.exag;
+document.getElementById('exag-val').textContent = state.exag + '×';
 exagEl.oninput = () => {
   state.exag = +exagEl.value;
   document.getElementById('exag-val').textContent = state.exag + '×';
@@ -1012,20 +1042,7 @@ addEventListener('resize', () => {
 // Timeline: replay how the network grew, 1935 to today
 // ---------------------------------------------------------------------------
 
-const MILESTONES = [
-  [1935.37, 'The first line opens: 13 stations from Sokolniki to Park Kultury', 'Открыта первая линия: 13 станций от «Сокольников» до «Парка культуры»'],
-  [1938.69, 'Zamoskvoretskaya line opens', 'Открыта Замоскворецкая линия'],
-  [1943.0, 'The metro keeps growing even during the war', 'Метро строят даже во время войны'],
-  [1953.26, 'Deep Arbatskaya section opens, built to double as a bomb shelter', 'Глубокий Арбатский радиус: его строили и как бомбоубежище'],
-  [1954.08, 'The Circle line is closed into a ring', 'Кольцевая линия замкнулась'],
-  [1959.03, 'Leninskiye Gory (now Vorobyovy Gory): a station inside a bridge', '«Ленинские горы» (сейчас «Воробьёвы горы»): станция внутри моста'],
-  [1979.99, 'Kalininskaya line opens', 'Открыта Калининская линия'],
-  [1983.85, 'Serpukhovskaya line opens', 'Открыта Серпуховская линия'],
-  [1995.99, 'Lyublinskaya line opens', 'Открыта Люблинская линия'],
-  [2003.35, 'Park Pobedy opens: the deepest station, 84 m', 'Открыт «Парк Победы»: самая глубокая станция, 84 м'],
-  [2016.69, 'MCC opens: a surface ring around the centre', 'Открыто МЦК: наземное кольцо вокруг центра'],
-  [2023.16, 'The Big Circle Line closes: the longest metro ring in the world', 'Большая кольцевая замкнулась: самое длинное кольцо метро в мире'],
-];
+const MILESTONES = city.milestones;
 
 let playing = false;
 const tl = {
@@ -1035,7 +1052,8 @@ const tl = {
 };
 tl.range.min = FIRST_YEAR;
 tl.range.max = TIMELINE_END;
-document.getElementById('tl-last').textContent = LAST_YEAR;
+document.querySelector('.tl-axis').innerHTML = [0, 1, 2, 3, 4]
+  .map((i) => `<span>${Math.round(FIRST_YEAR + ((LAST_YEAR - FIRST_YEAR) * i) / 4)}</span>`).join('');
 let captionText = '';
 
 function updateTimeline() {

@@ -27,13 +27,21 @@
     <header class="brand">
       <div class="brand-mark" aria-hidden="true">M</div>
       <div>
-        <h1 data-i18n="title">Moscow Metro, underground</h1>
+        <h1 id="title">Метро под землёй</h1>
         <p class="muted" id="subtitle"></p>
       </div>
       <button class="icon-btn only-mobile" id="panel-toggle" aria-label="Toggle panel">☰</button>
     </header>
 
     <div class="panel-body">
+      <section class="group">
+        <div class="seg city-seg" role="tablist" aria-label="City">
+          <button data-city="moscow">Москва</button>
+          <button data-city="paris">Париж</button>
+        </div>
+        <p id="city-note" class="city-note" hidden></p>
+      </section>
+
       <section class="group">
         <div class="seg" role="tablist" aria-label="Camera view">
           <button data-view="overview" class="active" data-i18n="vOverview">Overview</button>
